@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var hotKeyRef: EventHotKeyRef?
     var isLoading = false
     var loadingTimer: Timer?
+    var loadingPopup: NSWindow?
 
     // Configuration properties
     var customModel: String = "gnokit/improve-grammar"
@@ -43,6 +44,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Clean up hotkey registration
         unregisterHotkey()
+
+        // Clean up floating tooltip
+        hideFloatingTooltip()
     }
 
     func registerHotkey() {
@@ -132,7 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func showSettings() {
         // Always create a new window to avoid memory issues
-        settingsWindow?.close()
+        settingsWindow?.orderOut(nil)
         settingsWindow = nil
 
         createSettingsWindow()
@@ -144,33 +148,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
 
-    func restartApp() {
-        // Get the current app's path
-        let appPath = Bundle.main.bundlePath
-
-        // Launch the app again
-        let task = Process()
-        task.launchPath = "/usr/bin/open"
-        task.arguments = [appPath]
-
-        do {
-            try task.run()
-
-            // Terminate current instance after a short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApp.terminate(nil)
-            }
-        } catch {
-            print("Failed to restart app: \(error)")
-            showNotification("Failed to restart app. Please restart manually.")
-        }
-    }
-
     // MARK: - NSWindowDelegate
     func windowWillClose(_ notification: Notification) {
+        print("close app")
         if let window = notification.object as? NSWindow, window == settingsWindow {
+            settingsWindow?.orderOut(nil)
             settingsWindow = nil
         }
+    }
+    
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        print("Red close button clicked!")
+        NSApp.terminate(nil)
+        return true
     }
 
     // MARK: - Settings Window
@@ -360,25 +350,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         saveSettingsToUserDefaults()
 
         // Close window
-        window.close()
+        settingsWindow?.orderOut(nil)
         settingsWindow = nil
 
         showNotification("Settings saved successfully. Restarting app...")
-
-        // Restart the app after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.restartApp()
-        }
     }
 
     @objc func cancelSettings() {
-        settingsWindow?.close()
+        settingsWindow?.orderOut(nil)
+        settingsWindow = nil
         // settingsWindow will be set to nil in windowWillClose delegate method
     }
 
     @objc func resetSettings() {
-        customModel = "llama3"
-        customPrompt = "Check grammar and rephrase this text more naturally if it is not correct. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
+        customModel = "gnokit/improve-grammar"
+        customPrompt = "Please check the following text for grammar, punctuation, and spelling errors. Correct any mistakes while keeping the original meaning and tone intact. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
         customHotkey = UInt32(kVK_ANSI_R)
         customApiEndpoint = "http://localhost:11434/api/generate"
 
@@ -439,6 +425,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             showNotification("Already processing...")
             return
         }
+
+        // Force cleanup any lingering popup references before starting
+        forceCleanupLoadingPopup()
         // Save current clipboard
         let pasteboard = NSPasteboard.general
         let oldClipboard = pasteboard.string(forType: .string)
@@ -470,19 +459,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         cUp?.post(tap: loc)
         cmdUp?.post(tap: loc)
 
-        print("DEBUG: Posted Cmd+C events to copy selection")
-
         // Wait a moment for clipboard update - increased time for better reliability
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             // Check what's actually in the clipboard
             let currentClipboard = pasteboard.string(forType: .string)
-            print("DEBUG: Old clipboard content: '\(oldClipboard ?? "nil")'")
-            print("DEBUG: Current clipboard content: '\(currentClipboard ?? "nil")'")
-
-            // Check if clipboard actually changed
-            if currentClipboard == oldClipboard {
-                print("WARNING: Clipboard content did not change after Cmd+C!")
-            }
 
             guard let selectedText = currentClipboard, !selectedText.isEmpty else {
                 self.showNotification("No text copied")
@@ -496,17 +476,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return
             }
 
-            // Debug logging
-            print("DEBUG: selectedText from clipboard: '\(selectedText)'")
-            print("DEBUG: trimmedText: '\(trimmedText)'")
-            print("DEBUG: customPrompt: '\(self.customPrompt)'")
-
-            // Start loading animation
+            // Start loading animation and show popup
             self.startLoadingAnimation()
+            //self.showLoadingPopup()
 
             self.sendToOllama(input: trimmedText) { result in
                 DispatchQueue.main.async {
-                    // Stop loading animation
+                    // Stop loading animation (this will also restore the cursor)
                     self.stopLoadingAnimation()
 
                     switch result {
@@ -556,15 +532,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
 
-        print("raw input: '\(input)'")
-
         let finalPrompt = customPrompt.replacingOccurrences(of: "{INPUT}", with: input)
-        print("DEBUG: finalPrompt after replacement: '\(finalPrompt)'")
-
-        // Verify that replacement actually occurred
-        if finalPrompt == customPrompt {
-            print("WARNING: {INPUT} placeholder was not found in customPrompt!")
-        }
 
         let body: [String: Any] = [
             "model": customModel,
@@ -602,7 +570,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     }
                 }
             }
-            print("repsonse: \(resultText)")
 
             if resultText.isEmpty {
                 completion(.failure(NSError(domain: "ParseError", code: 0)))
@@ -621,6 +588,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !isLoading else { return }
         isLoading = true
 
+        // Show floating tooltip
+        showFloatingTooltip()
+
         let loadingEmojis = ["⏳", "⏰", "⏱️", "🔄", "⚡", "✨", "💫", "🌟"]
         var currentIndex = 0
 
@@ -638,12 +608,183 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard isLoading else { return }
         isLoading = false
 
+        // Hide floating tooltip
+        hideFloatingTooltip()
+
         loadingTimer?.invalidate()
         loadingTimer = nil
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let button = self.statusItem.button else { return }
             button.title = "✍️"
+
+            // Hide loading popup
+            self.hideLoadingPopup()
+        }
+    }
+
+    // MARK: - Floating Tooltip
+    var floatingTooltip: NSWindow?
+    var tooltipTimer: Timer?
+
+    func showFloatingTooltip() {
+        // Hide any existing tooltip first
+        hideFloatingTooltip()
+
+        // Get current mouse position
+        let mouseLocation = NSEvent.mouseLocation
+
+        // Create a small floating window
+        let tooltip = NSWindow(
+            contentRect: NSRect(x: mouseLocation.x + 10, y: mouseLocation.y - 10, width: 120, height: 30),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        tooltip.backgroundColor = NSColor.clear
+        tooltip.isOpaque = false
+        tooltip.hasShadow = true
+        tooltip.level = NSWindow.Level.floating
+        tooltip.ignoresMouseEvents = true
+        tooltip.collectionBehavior = [.canJoinAllSpaces, .stationary]
+
+        // Create content view
+        let contentView = NSView(frame: tooltip.contentView!.bounds)
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.95).cgColor
+        contentView.layer?.cornerRadius = 6
+        contentView.layer?.borderWidth = 1
+        contentView.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        // Add "Processing..." text
+        let label = NSTextField(labelWithString: "Processing...")
+        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        label.textColor = NSColor.labelColor
+        label.alignment = .center
+        label.backgroundColor = NSColor.clear
+        label.isBordered = false
+        label.frame = NSRect(x: 5, y: 5, width: 110, height: 20)
+        contentView.addSubview(label)
+
+        tooltip.contentView = contentView
+        tooltip.orderFront(nil)
+
+        self.floatingTooltip = tooltip
+
+        // Start timer to follow mouse cursor
+        startTooltipMouseTracking()
+    }
+
+    func hideFloatingTooltip() {
+        tooltipTimer?.invalidate()
+        tooltipTimer = nil
+
+        if let tooltip = self.floatingTooltip {
+            tooltip.orderOut(nil)   // removes window from screen
+            self.floatingTooltip = nil
+        }
+    }
+
+    func startTooltipMouseTracking() {
+        tooltipTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self, let tooltip = self.floatingTooltip else { return }
+
+            let mouseLocation = NSEvent.mouseLocation
+            let newFrame = NSRect(x: mouseLocation.x + 10, y: mouseLocation.y - 10, width: 120, height: 30)
+
+            DispatchQueue.main.async {
+                tooltip.setFrame(newFrame, display: true)
+            }
+        }
+    }
+
+    // MARK: - Cleanup Methods
+    func forceCleanupLoadingPopup() {
+        // Force cleanup of any lingering popup references
+        if loadingPopup != nil {
+            hideLoadingPopup()
+        }
+        // Double-check by setting to nil
+        loadingPopup = nil
+    }
+
+    // MARK: - Loading Popup
+    func showLoadingPopup() {
+        // Completely destroy any existing popup first
+        hideLoadingPopup()
+
+        // Get current mouse position
+        let mouseLocation = NSEvent.mouseLocation
+
+        // Create a small popup window
+        let popup = NSWindow(
+            contentRect: NSRect(x: mouseLocation.x - 50, y: mouseLocation.y - 20, width: 100, height: 40),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        popup.backgroundColor = NSColor.clear
+        popup.isOpaque = false
+        popup.hasShadow = true
+        popup.level = NSWindow.Level.floating
+        popup.ignoresMouseEvents = true
+        popup.collectionBehavior = [.canJoinAllSpaces, .stationary]
+
+        // Create content view with loading animation
+        let contentView = NSView(frame: popup.contentView!.bounds)
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.9).cgColor
+        contentView.layer?.cornerRadius = 8
+        contentView.layer?.borderWidth = 1
+        contentView.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        // Add loading text
+        let loadingLabel = NSTextField(labelWithString: "Processing...")
+        loadingLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        loadingLabel.textColor = NSColor.labelColor
+        loadingLabel.alignment = .center
+        loadingLabel.backgroundColor = NSColor.clear
+        loadingLabel.isBordered = false
+        loadingLabel.frame = NSRect(x: 10, y: 10, width: 80, height: 20)
+        contentView.addSubview(loadingLabel)
+
+        popup.contentView = contentView
+        popup.orderFront(nil)
+
+        self.loadingPopup = popup
+
+        // Add a subtle pulsing animation
+        let pulseAnimation = CABasicAnimation(keyPath: "opacity")
+        pulseAnimation.fromValue = 0.7
+        pulseAnimation.toValue = 1.0
+        pulseAnimation.duration = 0.8
+        pulseAnimation.autoreverses = true
+        pulseAnimation.repeatCount = .infinity
+        pulseAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        contentView.layer?.add(pulseAnimation, forKey: "pulse")
+    }
+
+    func hideLoadingPopup() {
+        if let popup = loadingPopup {
+            // Remove all animations from the content view's layer before closing
+            if let contentView = popup.contentView {
+                contentView.layer?.removeAllAnimations()
+                // Clear the layer to prevent any retained references
+                contentView.layer = nil
+                contentView.wantsLayer = false
+            }
+
+            // Remove all subviews to break any retain cycles
+            popup.contentView?.subviews.forEach { $0.removeFromSuperview() }
+
+            // Close the window
+            popup.close()
+
+            // Clear the reference
+            loadingPopup = nil
         }
     }
 
