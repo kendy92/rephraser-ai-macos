@@ -11,8 +11,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var loadingTimer: Timer?
 
     // Configuration properties
-    var customModel: String = "llama3"
-    var customPrompt: String = "Check grammar and rephrase this text more naturally if it is not correct. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
+    var customModel: String = "gnokit/improve-grammar"
+    var customPrompt: String = "Please check the following text for grammar, punctuation, and spelling errors. Correct any mistakes while keeping the original meaning and tone intact. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
     var customHotkey: UInt32 = UInt32(kVK_ANSI_R) // Default to 'R' key
     var customApiEndpoint: String = "http://localhost:11434/api/generate"
 
@@ -33,6 +33,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Register hotkey Shift+Cmd+R
         registerHotkey()
+
+        // Show the main window
+        if let mainWindow = NSApp.windows.first {
+            mainWindow.makeKeyAndOrderFront(nil)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -102,6 +107,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         promptItem.isEnabled = false
         menu.addItem(promptItem)
 
+        let madeByText = NSMenuItem(title: "Made By LilcaSoft", action: nil, keyEquivalent: "")
+        promptItem.isEnabled = false
+        menu.addItem(madeByText)
+
         menu.addItem(NSMenuItem.separator())
 
         // Settings option
@@ -112,7 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(NSMenuItem.separator())
 
         // Quit option
-        let quitItem = NSMenuItem(title: "Quit Rephraser", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Rephraser AI", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
