@@ -52,7 +52,7 @@ class ViewController: NSViewController {
         view.addSubview(descriptionLabel)
 
         // Create instruction label (will be updated with actual hotkey)
-        let instructionLabel = NSTextField(labelWithString: "Select any text and press Shift+Cmd+R to rephrase it")
+        let instructionLabel = NSTextField(labelWithString: "Select any text and press Shift+Cmd+1 to rephrase it")
         instructionLabel.font = NSFont.systemFont(ofSize: 12)
         instructionLabel.textColor = NSColor.secondaryLabelColor
         instructionLabel.alignment = .center

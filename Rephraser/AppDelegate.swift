@@ -23,7 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         {INPUT}
 """
-    var customHotkey: UInt32 = UInt32(kVK_ANSI_R) // Default to 'R' key
+    var customHotkey: UInt32 = UInt32(kVK_ANSI_1) // Default to '1' key
     var customApiEndpoint: String = "http://localhost:11434/api/generate"
 
     // Settings window
@@ -44,7 +44,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.target = self
         }
 
-        // Register hotkey Shift+Cmd+R
+        // Register hotkey Shift+Cmd+1
         registerHotkey()
 
         // Show the main window
@@ -358,7 +358,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "5": UInt32(kVK_ANSI_5), "6": UInt32(kVK_ANSI_6), "7": UInt32(kVK_ANSI_7), "8": UInt32(kVK_ANSI_8),
             "9": UInt32(kVK_ANSI_9), "0": UInt32(kVK_ANSI_0)
         ]
-        return keyMap[keyName] ?? UInt32(kVK_ANSI_R)
+        return keyMap[keyName] ?? UInt32(kVK_ANSI_1)
     }
 
     @objc func popupChanged(_ sender: NSPopUpButton) {
@@ -424,7 +424,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         {INPUT}
 """
-        customHotkey = UInt32(kVK_ANSI_R)
+        customHotkey = UInt32(kVK_ANSI_1)
         customApiEndpoint = "http://localhost:11434/api/generate"
 
         // Update text fields
@@ -745,9 +745,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Add "Processing..." text
         let label = NSTextField(labelWithString: "Processing...")
         label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        label.textColor = NSColor.labelColor
+        label.textColor = NSColor.black
         label.alignment = .center
-        label.backgroundColor = NSColor.clear
+        label.backgroundColor = NSColor.white
         label.isBordered = false
         label.frame = NSRect(x: 5, y: 5, width: 110, height: 20)
         contentView.addSubview(label)
@@ -891,7 +891,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         • Read selected text from any application
         • Replace text with corrected versions
-        • Work with your hotkey (Shift+Cmd+R)
+        • Work with your hotkey (Shift+Cmd+1)
 
         Please follow these steps:
         1. Click "Open System Preferences" below
