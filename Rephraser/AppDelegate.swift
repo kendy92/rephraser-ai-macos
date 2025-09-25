@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon
 import UserNotifications
+import ApplicationServices
 
 @main
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -10,10 +11,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var isLoading = false
     var loadingTimer: Timer?
     var loadingPopup: NSWindow?
+    var currentTask: URLSessionDataTask?
 
     // Configuration properties
     var customModel: String = "gnokit/improve-grammar"
-    var customPrompt: String = "Please check the following text for grammar, punctuation, and spelling errors. Correct any mistakes while keeping the original meaning and tone intact. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
+    var customPrompt: String = """
+        INSTRUCTION:
+        Correct the following text for grammar, spelling, and punctuation.
+        Keep the original meaning and tone.
+        Return only the rephrased text, with no explanations, extra output, suggestions, or additional text.
+
+        {INPUT}
+"""
     var customHotkey: UInt32 = UInt32(kVK_ANSI_R) // Default to 'R' key
     var customApiEndpoint: String = "http://localhost:11434/api/generate"
 
@@ -23,6 +32,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Load saved settings
         loadSettings()
+
+        // Check accessibility permissions first
+        checkAccessibilityPermissions()
 
         // Add status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -117,6 +129,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Cancel Request option (only show when loading)
+        if isLoading {
+            let cancelItem = NSMenuItem(title: "Cancel Request", action: #selector(cancelCurrentRequest), keyEquivalent: "")
+            cancelItem.target = self
+            menu.addItem(cancelItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // Check Permissions option
+        let permissionsItem = NSMenuItem(title: "Check Permissions...", action: #selector(checkPermissionsManually), keyEquivalent: "")
+        permissionsItem.target = self
+        menu.addItem(permissionsItem)
+
         // Settings option
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -148,6 +173,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc func checkPermissionsManually() {
+        checkAccessibilityPermissions()
+    }
+
+    @objc func cancelCurrentRequest() {
+        guard isLoading else { return }
+
+        // Cancel the current URLSession task
+        currentTask?.cancel()
+        currentTask = nil
+
+        // Stop loading animation and cleanup
+        stopLoadingAnimation()
+
+        // Show notification
+        showNotification("Request cancelled by user")
+
+//        // Update status if we have access to ViewController
+//        if let mainWindow = NSApp.windows.first,
+//           let viewController = mainWindow.contentViewController as? ViewController {
+//            viewController.updateStatus("Request cancelled", color: NSColor.systemOrange)
+//        }
+    }
+
     // MARK: - NSWindowDelegate
     func windowWillClose(_ notification: Notification) {
         print("close app")
@@ -156,7 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settingsWindow = nil
         }
     }
-    
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         print("Red close button clicked!")
         NSApp.terminate(nil)
@@ -349,6 +398,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Save to UserDefaults
         saveSettingsToUserDefaults()
 
+        // Notify ViewController to update instruction label
+        NotificationCenter.default.post(name: NSNotification.Name("HotkeySettingsChanged"), object: nil)
+
         // Close window
         settingsWindow?.orderOut(nil)
         settingsWindow = nil
@@ -364,7 +416,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func resetSettings() {
         customModel = "gnokit/improve-grammar"
-        customPrompt = "Please check the following text for grammar, punctuation, and spelling errors. Correct any mistakes while keeping the original meaning and tone intact. Return ONLY the rephrased text with no explanations, comments, suggestions, or additional text: {INPUT}"
+        customPrompt = """
+        INSTRUCTION:
+        Correct the following text for grammar, spelling, and punctuation.
+        Keep the original meaning and tone.
+        Return only the rephrased text, with no explanations, extra output, suggestions, or additional text.
+
+        {INPUT}
+"""
         customHotkey = UInt32(kVK_ANSI_R)
         customApiEndpoint = "http://localhost:11434/api/generate"
 
@@ -420,6 +479,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Processing Selected Text via Copy/Paste
     func processSelection() {
+        // Check accessibility permissions first
+        guard AXIsProcessTrusted() else {
+            showNotification("Accessibility permissions required. Please check permissions in the menu.")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.checkAccessibilityPermissions()
+            }
+            return
+        }
+
         // Prevent multiple simultaneous requests
         guard !isLoading else {
             showNotification("Already processing...")
@@ -508,7 +576,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
                         self.showNotification("Text corrected and replaced")
                     case .failure(let error):
-                        self.showNotification("Error: \(error.localizedDescription)")
+                        // Check if it's a cancellation error
+                        if let nsError = error as NSError?, nsError.code == NSURLErrorCancelled {
+                            // Don't show error notification for user-initiated cancellation
+                            // The cancelCurrentRequest method already shows a notification
+                        } else {
+                            self.showNotification("Error: \(error.localizedDescription)")
+                        }
                     }
                 }
             }
@@ -540,7 +614,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        let task = URLSession.shared.dataTask(with: request) { data, _, error in
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            // Check if task was cancelled
+            if let error = error as NSError?, error.code == NSURLErrorCancelled {
+                completion(.failure(NSError(domain: "RequestCancelled", code: NSURLErrorCancelled, userInfo: [NSLocalizedDescriptionKey: "Request was cancelled by user"])))
+                return
+            }
+
             if let error = error {
                 completion(.failure(error))
                 return
@@ -578,6 +658,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
 
+        // Store the task reference for potential cancellation
+        currentTask = task
         task.resume()
     }
 
@@ -607,6 +689,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func stopLoadingAnimation() {
         guard isLoading else { return }
         isLoading = false
+
+        // Clear the current task reference
+        currentTask = nil
 
         // Hide floating tooltip
         hideFloatingTooltip()
@@ -785,6 +870,92 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             // Clear the reference
             loadingPopup = nil
+        }
+    }
+
+    // MARK: - Accessibility Permissions
+    func checkAccessibilityPermissions() {
+        // Check if accessibility permissions are granted
+        let trusted = AXIsProcessTrusted()
+
+        if !trusted {
+            showAccessibilityPermissionDialog()
+        }
+    }
+
+    func showAccessibilityPermissionDialog() {
+        let alert = NSAlert()
+        alert.messageText = "Accessibility Permission Required"
+        alert.informativeText = """
+        Rephraser AI needs accessibility permissions to work properly. This allows the app to:
+
+        • Read selected text from any application
+        • Replace text with corrected versions
+        • Work with your hotkey (Shift+Cmd+R)
+
+        Please follow these steps:
+        1. Click "Open System Preferences" below
+        2. Go to "Privacy & Security" → "Accessibility" and "Privacy & Security" → "Input Monitoring"
+        3. Add Rephraser AI app to the list and enable it
+        4. Restart the app
+
+        The app will not function without these permissions.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open System Preferences")
+        alert.addButton(withTitle: "Check Again")
+        alert.addButton(withTitle: "Quit App")
+
+        let response = alert.runModal()
+
+        switch response {
+        case .alertFirstButtonReturn:
+            // Open System Preferences to Accessibility
+            openSystemPreferencesAccessibility()
+        case .alertSecondButtonReturn:
+            // Check again after a delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.checkAccessibilityPermissions()
+            }
+        case .alertThirdButtonReturn:
+            // Quit the app
+            NSApp.terminate(nil)
+        default:
+            break
+        }
+    }
+
+    func openSystemPreferencesAccessibility() {
+        // Open System Preferences to the Accessibility section
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        NSWorkspace.shared.open(url)
+
+        // Show a follow-up dialog after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.showPermissionFollowUpDialog()
+        }
+    }
+
+    func showPermissionFollowUpDialog() {
+        let alert = NSAlert()
+        alert.messageText = "Permission Setup Reminder"
+        alert.informativeText = """
+        After adding Rephraser AI to Accessibility permissions:
+
+        1. Make sure the toggle is ON (enabled)
+        2. Close System Preferences
+        3. Click "Check Again" to verify permissions
+
+        If you've already enabled the permission, click "Check Again" now.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Check Again")
+        alert.addButton(withTitle: "I'll Do It Later")
+
+        let response = alert.runModal()
+
+        if response == .alertFirstButtonReturn {
+            checkAccessibilityPermissions()
         }
     }
 

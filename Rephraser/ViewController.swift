@@ -17,6 +17,19 @@ class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
+        updateInstructionLabel()
+
+        // Listen for hotkey settings changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(hotkeySettingsChanged),
+            name: NSNotification.Name("HotkeySettingsChanged"),
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func setupUI() {
@@ -38,7 +51,7 @@ class ViewController: NSViewController {
         descriptionLabel.autoresizingMask = [.width, .minYMargin]
         view.addSubview(descriptionLabel)
 
-        // Create instruction label
+        // Create instruction label (will be updated with actual hotkey)
         let instructionLabel = NSTextField(labelWithString: "Select any text and press Shift+Cmd+R to rephrase it")
         instructionLabel.font = NSFont.systemFont(ofSize: 12)
         instructionLabel.textColor = NSColor.secondaryLabelColor
@@ -106,6 +119,23 @@ class ViewController: NSViewController {
             self.statusLabel?.stringValue = message
             self.statusLabel?.textColor = color
         }
+    }
+
+    // Method to update instruction label with current hotkey
+    func updateInstructionLabel() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+
+        let keyName = appDelegate.getKeyName(for: appDelegate.customHotkey)
+        let instructionText = "Select any text and press Shift+Cmd+\(keyName) to rephrase it"
+
+        DispatchQueue.main.async {
+            self.instructionLabel?.stringValue = instructionText
+        }
+    }
+
+    // Respond to hotkey settings changes
+    @objc func hotkeySettingsChanged() {
+        updateInstructionLabel()
     }
 }
 
